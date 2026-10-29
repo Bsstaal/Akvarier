@@ -1,9 +1,9 @@
-MIT AKVARIUM V2.2 – rettelse til Excel 32767-tegn
-- Alle akvarier, vandskift, målinger, statistik og Microsoft-login bevares.
-- Billeder lagres som separate JPG-filer i OneDrive-appmappen; Excel lagrer kun filnavnet.
-- Tidligere billeder i backup forsøges migreret ved næste gemning.
-- Service worker er ændret til network-first uden caching af HTML for at undgå gamle versioner.
-- Inden opdatering: tag backup af Akvarier.xlsx og brug Eksportér backup i appen ved fejl.
-- Upload ALLE filerne i ZIP til roden af GitHub-repository Akvarier.
-- Åbn siden med ?v=22, og kontrollér at appen er opdateret.
-- Vær opmærksom på at OneDrive-adgang og upload af billede ikke kan live-testes her.
+MIT AKVARIUM – KOMPLET GITHUB PAKKE
+
+Indeholder den eksisterende V2.3 webapp og KÆLDERDYBET PWA-ikoner.
+
+Upload ALLE filer fra ZIP direkte til roden af GitHub-repository bsstaal/Akvarier og erstat eksisterende filer.
+Filer: index.html, manifest.webmanifest, sw.js, icon-192.png, icon-512.png.
+
+Programmet bruger fortsat samme Microsoft Client ID, OneDrive og Excel-fil Akvarier.xlsx.
+Tag backup af Excel-filen før ændringer. Efter upload: opdater siden med Ctrl+F5. Hvis det gamle ikon vises på telefonen, fjern appen fra hjemmeskærmen og installer den igen.
