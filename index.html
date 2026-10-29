@@ -81,7 +81,7 @@ function fromWorkbook(wb){
 }
 function cleanCell(v,field){
  const text=String(v??'');
- if(/^data:image\\//i.test(text))return '';
+ if(/^data:image\//i.test(text))return '';
  if(text.length>32000)throw Error('Feltet '+field+' indeholder '+text.length+' tegn. Excel understøtter højst 32767. Kort teksten ned og prøv igen.');
  return text;
 }
