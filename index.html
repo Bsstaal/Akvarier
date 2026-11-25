@@ -32,7 +32,7 @@ function openPhoto(t){el('photoTankId').value=t.id;el('photoFile').value='';el('
 function photoData(file){return new Promise((resolve,reject)=>{const image=new Image(),url=URL.createObjectURL(file);image.onload=()=>{try{const canvas=document.createElement('canvas'),scale=Math.min(1,900/image.width,600/image.height);canvas.width=Math.max(1,Math.round(image.width*scale));canvas.height=Math.max(1,Math.round(image.height*scale));canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height);let quality=.78,output=canvas.toDataURL('image/jpeg',quality);while(output.length>150000&&quality>.28){quality-=.12;output=canvas.toDataURL('image/jpeg',quality)}URL.revokeObjectURL(url);if(output.length>190000)reject(Error('Billedet er for stort efter komprimering'));else resolve(output)}catch(e){URL.revokeObjectURL(url);reject(e)}};image.onerror=()=>{URL.revokeObjectURL(url);reject(Error('Billedet kunne ikke læses'))};image.src=url})}
 el('photoFile').onchange=async()=>{const file=el('photoFile').files[0];if(!file)return;if(file.size>8000000||!['image/jpeg','image/png','image/webp'].includes(file.type)){alert('Vælg et JPG, PNG eller WebP-billede under 8 MB');return}try{el('photoPreview').src=await photoData(file);el('photoPreview').classList.remove('hidden')}catch(e){alert(e.message)}};
 el('photoForm').onsubmit=async e=>{e.preventDefault();if(!ready)return;const t=data.tanks.find(t=>t.id===el('photoTankId').value),file=el('photoFile').files[0];if(!t||!file)return;try{const encoded=await photoData(file);
- const filename='akvarium-'+encodeURIComponent(t.id).replace(/%/g,'_')+'.jpg';
+ const filename='akvarium-'+id()+'.jpg';
  const bytes=Uint8Array.from(atob(encoded.split(',')[1]),c=>c.charCodeAt(0));
  await graph('/me/drive/special/approot:/'+encodeURIComponent(filename)+':/content',{method:'PUT',headers:{'Content-Type':'image/jpeg'},body:bytes});
  t.photo=encoded;t.photoFile=filename;save();el('photoDialog').close();toast('Billede uploadet – Excel opdateres')}catch(err){alert(err.message)}};
@@ -62,6 +62,15 @@ const CLIENT_ID='da93f75a-dcab-44fe-b9ba-a6a8cda3bf53',FILE='Akvarier.xlsx';
 let auth=null,account=null,ready=false,etag=null,remoteItem=null,saveTimer=null,saving=false,dirty=false;
 const status=s=>el('cloudStatus').textContent=s;
 let initPromise=null, interactiveLogin=false;
+let cacheKey=null, cacheQueue=Promise.resolve(), loading=false, revision=0;
+const dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open('mit-akvarium-offline',1);r.onupgradeneeded=()=>r.result.createObjectStore('accounts');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
+dbPromise.catch(()=>{});
+async function cacheRead(key){const db=await dbPromise;return new Promise((resolve,reject)=>{const r=db.transaction('accounts').objectStore('accounts').get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+function cacheWrite(){if(!cacheKey||!ready)return Promise.resolve();const key=cacheKey, value=JSON.parse(JSON.stringify({data,etag,remoteItem,dirty:dirty||saving}));cacheQueue=cacheQueue.catch(()=>{}).then(async()=>{const db=await dbPromise;return new Promise((resolve,reject)=>{const tx=db.transaction('accounts','readwrite');tx.objectStore('accounts').put(value,key);tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error)})});return cacheQueue}
+function cacheError(e){status('Lokal lagring mislykkedes: '+e.message+' · Eksportér backup.');}
+async function restoreCache(){cacheKey=account.homeAccountId;const c=await cacheRead(cacheKey);if(c){data=c.data;etag=c.etag;remoteItem=c.remoteItem;dirty=c.dirty;ready=true;render();status(dirty?'Lokale ændringer afventer synkronisering':'Viser lokale data · synkroniserer…')}}
+async function synchronize(){if(loading||saving||!account)return;if(!navigator.onLine){status(dirty?'Offline · ændringer afventer':'Offline · lokale data');return}try{if(dirty)await persistCloud();else await loadCloud()}catch(e){status('Ikke synkroniseret · '+e.message+(dirty?' · Lokale ændringer bevaret; eksportér backup ved konflikt.':''))}}
+
 function initialize(){
  if(!initPromise) initPromise=initializeAuth().catch(e=>{initPromise=null;throw e});
  return initPromise;
@@ -100,7 +109,7 @@ function cleanCell(v,field){
 }
 async function uploadPhoto(t){
  if(!t.photo||t.photoFile||!/^data:image\\/i.test(t.photo))return;
- const filename='akvarium-'+encodeURIComponent(t.id).replace(/%/g,'_')+'.jpg';
+ const filename='akvarium-'+id()+'.jpg';
  const bytes=Uint8Array.from(atob(t.photo.split(',')[1]),c=>c.charCodeAt(0));
  await graph('/me/drive/special/approot:/'+encodeURIComponent(filename)+':/content',{method:'PUT',headers:{'Content-Type':'image/jpeg'},body:bytes});
  t.photoFile=filename;
@@ -108,29 +117,30 @@ async function uploadPhoto(t){
 function numOrNull(v){return v===''||v===null||v===undefined?null:Number.isFinite(Number(v))?Number(v):null}function toWorkbook(source=data){const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(source.tanks.map(t=>({ID:cleanCell(t.id,'Akvarium ID'),Navn:cleanCell(t.name,'Akvarium navn'),Liter:t.size,IntervalDage:t.interval,BilledeData:cleanCell(t.photoFile||'','Billedfil')})),{header:['ID','Navn','Liter','IntervalDage','BilledeData']}),'Akvarier');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(source.changes.map(c=>({ID:c.id,AkvariumID:c.tankId,Dato:c.date,Liter:c.liters,Note:cleanCell(c.note,'Vandskift note')})),{header:['ID','AkvariumID','Dato','Liter','Note']}),'Vandskift');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet((source.measurements||[]).map(m=>({ID:m.id,AkvariumID:m.tankId,Dato:m.date,pH:m.ph??'',NO3:m.no3??'',NO2:m.no2??'',KH:m.kh??'',GH:m.gh??'',Temperatur:m.temp??'',Ledningsevne:m.tds??'',Note:cleanCell(m.note||'','Måling note')})),{header:['ID','AkvariumID','Dato','pH','NO3','NO2','KH','GH','Temperatur','Ledningsevne','Note']}),'Vandværdier');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet((source.maintenance||[]).map(m=>({ID:m.id,AkvariumID:m.tankId,Dato:m.date,Opgave:cleanCell(m.type,'Vedligeholdelse opgave'),Note:cleanCell(m.note||'','Vedligeholdelse note')})),{header:['ID','AkvariumID','Dato','Opgave','Note']}),'Vedligeholdelse');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet((source.breeding||[]).map(x=>({ID:cleanCell(x.id,'Opdræt ID'),AkvariumID:cleanCell(x.tankId,'Opdræt akvarium'),Fiskeart:cleanCell(x.species,'Fiskeart'),Startdato:x.date,Klækkedato:x.hatch||'',AntalÆg:x.eggs??'',AntalUnger:x.fry??'',Status:cleanCell(x.status,'Opdræt status'),Note:cleanCell(x.note||'','Opdræt note')})),{header:['ID','AkvariumID','Fiskeart','Startdato','Klækkedato','AntalÆg','AntalUnger','Status','Note']}),'Opdræt');return XLSX.write(wb,{bookType:'xlsx',type:'array'})}
 async function loadCloud(){
  if(dirty||saving)throw Error('Der er ændringer, som endnu ikke er gemt. Prøv igen senere.');
- status('Henter akvarier fra OneDrive…');
+ loading=true;const startRevision=revision;try{status('Henter akvarier fra OneDrive…');
  // Only access app folder. The user must upload the supplied template there first.
  const folder=await (await graph('/me/drive/special/approot')).json();
  const listing=await (await graph('/me/drive/items/'+encodeURIComponent(folder.id)+'/children?$top=200')).json();
- remoteItem=listing.value.find(x=>x.name===FILE&&x.file);
- if(!remoteItem)throw Error('Excel-filen '+FILE+' findes ikke i appmappen. Upload den til OneDrive / Apps / '+(folder.name||'appmappen')+'.');
- const response=await graph('/me/drive/items/'+encodeURIComponent(remoteItem.id)+'/content');
+ const item=listing.value.find(x=>x.name===FILE&&x.file);
+ if(!item)throw Error('Excel-filen '+FILE+' findes ikke i appmappen. Upload den til OneDrive / Apps / '+(folder.name||'appmappen')+'.');
+ const response=await graph('/me/drive/items/'+encodeURIComponent(item.id)+'/content');
  const wb=XLSX.read(await response.arrayBuffer(),{type:'array',raw:false});
- data=fromWorkbook(wb);etag=remoteItem.eTag;ready=true;render();status('Forbundet til OneDrive · '+data.tanks.length+' akvarier');
+ const incoming=fromWorkbook(wb);
  // Load private photo files after the Excel workbook is ready.
- await Promise.all(data.tanks.filter(t=>t.photoFile).map(async t=>{
+ await Promise.all(incoming.tanks.filter(t=>t.photoFile).map(async t=>{
  try{
  const r=await graph('/me/drive/special/approot:/'+encodeURIComponent(t.photoFile)+':/content');
  const blob=await r.blob();if(blob.size>3000000)throw Error('Billedet er for stort');
  const reader=new FileReader();
  t.photo=await new Promise((resolve,reject)=>{reader.onload=()=>resolve(safePhoto(reader.result));reader.onerror=reject;reader.readAsDataURL(blob)});
  }catch(e){console.warn('Kunne ikke hente akvariebillede:',t.photoFile,e.message)}
- }));render();
+ }));if(revision!==startRevision||dirty)return;data=incoming;remoteItem=item;etag=item.eTag;ready=true;render();await cacheWrite();status('Forbundet til OneDrive · '+data.tanks.length+' akvarier');
+ }finally{loading=false;if(dirty&&navigator.onLine)setTimeout(synchronize,500)}
 }
-function scheduleSave(){if(!ready){status('Ikke forbundet – ændringer kan ikke gemmes');return}dirty=true;status('Ændringer afventer gemning…');clearTimeout(saveTimer);saveTimer=setTimeout(()=>persistCloud().catch(e=>{status('GEMMEFEJL: '+e.message+' · Gem en backup og genindlæs ikke siden.');alert('Kunne ikke gemme i OneDrive: '+e.message)}),500)}
+function scheduleSave(){if(!ready)return;revision++;dirty=true;status('Gemmer lokalt…');cacheWrite().then(()=>{status(navigator.onLine?'Lokalt gemt · afventer synkronisering':'Offline · lokalt gemt');clearTimeout(saveTimer);saveTimer=setTimeout(synchronize,500)}).catch(cacheError)}
 async function persistCloud(){
- if(saving||!dirty)return;
- saving=true;dirty=false;status('Gemmer i OneDrive…');
+ if(saving||loading||!dirty||!navigator.onLine)return; if(!etag||!remoteItem)throw Error("Mangler filversion; eksportér backup.");
+ await cacheQueue; saving=true;dirty=false;status('Gemmer i OneDrive…');
  const snapshot=JSON.parse(JSON.stringify(data));let success=false;
  try{
  const current=await (await graph('/me/drive/items/'+encodeURIComponent(remoteItem.id)+'?$select=id,eTag')).json();
@@ -142,10 +152,10 @@ async function persistCloud(){
   }
  }
  // Preserve migrated filenames in the current UI state as well.
- for(const t of snapshot.tanks){const live=data.tanks.find(x=>x.id===t.id);if(live&&t.photoFile)live.photoFile=t.photoFile}
+ for(const t of snapshot.tanks){const live=data.tanks.find(x=>x.id===t.id);if(live&&t.photoFile&&live.photo===t.photo)live.photoFile=t.photoFile}
  const bytes=toWorkbook(snapshot);if(bytes.byteLength>3500000)throw Error('Excel-filen er over 3,5 MB. Fjern eller udskift billeder med mindre filer.');const r=await graph('/me/drive/items/'+encodeURIComponent(remoteItem.id)+'/content',{method:'PUT',headers:{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','If-Match':etag},body:bytes});
  const saved=await r.json();etag=saved.eTag||null;remoteItem=saved;success=true;status('Gemt i OneDrive · '+new Date().toLocaleTimeString('da-DK'));
- }catch(e){dirty=true;throw e}finally{saving=false;if(success&&dirty&&etag&&ready){setTimeout(()=>persistCloud().catch(e=>{status('GEMMEFEJL: '+e.message);alert('Kunne ikke gemme: '+e.message)}),700)}}
+ }catch(e){dirty=true;throw e}finally{saving=false;await cacheWrite().catch(cacheError);if(success&&dirty)setTimeout(synchronize,700)}
 }
 function statusIsSaved(){return el('cloudStatus').textContent.startsWith('Gemt i OneDrive')}
 async function connect(interactive=false){
@@ -153,12 +163,16 @@ async function connect(interactive=false){
  try{
  status(interactive?'Logger ind…':'Genopretter forbindelse…');await initialize();
  if(interactive){await auth.loginRedirect({scopes:['Files.ReadWrite.AppFolder']});return;}else if(!account){status('Log ind for at forbinde til OneDrive');return;}
- await loadCloud();button.textContent='Forbundet ✓';
+ if(!ready)await restoreCache().catch(cacheError);await synchronize();button.textContent=ready?'Forbundet / log ind igen':'Log ind / forbind igen';
  }catch(e){status('Forbindelse ikke oprettet: '+e.message);button.textContent='Log ind / forbind igen';if(interactive)alert((e.errorCode?e.errorCode+': ':'')+e.message);}
  finally{interactiveLogin=false;button.disabled=false;}
 }
 el('login').onclick=()=>connect(true);
-el('sync').onclick=async()=>{try{if(!ready)throw Error('Log ind først');await loadCloud()}catch(e){status('Fejl: '+e.message);alert(e.message)}};
+el('sync').onclick=()=>synchronize();
+window.addEventListener('online',synchronize);
+window.addEventListener('offline',()=>{if(ready)status(dirty?'Offline · ændringer afventer':'Offline · lokale data')});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)synchronize()});
+const logout=document.createElement('button');logout.textContent='Log ud';el('login').after(logout);logout.onclick=async()=>{if(dirty||saving||loading)return alert('Synkronisér først eller eksportér backup.');if(!account)return;try{await cacheQueue;const db=await dbPromise;await new Promise((resolve,reject)=>{const tx=db.transaction('accounts','readwrite');tx.objectStore('accounts').delete(cacheKey);tx.oncomplete=resolve;tx.onerror=reject});ready=false;cacheKey=null;data={tanks:[],changes:[],measurements:[],maintenance:[],breeding:[]};render();await auth.logoutRedirect({account})}catch(e){status(e.message)}};
 window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue=''}});render();connect(false)})();
 </script><script>
 (()=>{
