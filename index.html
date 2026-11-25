@@ -61,16 +61,23 @@ if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.ser
 const CLIENT_ID='da93f75a-dcab-44fe-b9ba-a6a8cda3bf53',FILE='Akvarier.xlsx';
 let auth=null,account=null,ready=false,etag=null,remoteItem=null,saveTimer=null,saving=false,dirty=false;
 const status=s=>el('cloudStatus').textContent=s;
-async function initialize(){
+let initPromise=null, interactiveLogin=false;
+function initialize(){
+ if(!initPromise) initPromise=initializeAuth().catch(e=>{initPromise=null;throw e});
+ return initPromise;
+}
+async function initializeAuth(){
  if(!window.msal||!window.XLSX)throw Error('Microsoft-login eller Excel-bibliotek blev ikke indlæst');
  if(CLIENT_ID.startsWith('INDSAET'))throw Error('Indsæt Client ID fra din egen Azure-appregistrering i index.html');
- auth=new msal.PublicClientApplication({auth:{clientId:CLIENT_ID,authority:'https://login.microsoftonline.com/consumers',redirectUri:location.origin+location.pathname},cache:{cacheLocation:'sessionStorage'}});
+ auth=new msal.PublicClientApplication({auth:{clientId:CLIENT_ID,authority:'https://login.microsoftonline.com/consumers',redirectUri:location.origin+location.pathname},cache:{cacheLocation:'localStorage'}});
  if(auth.initialize)await auth.initialize();
- await auth.handleRedirectPromise();account=auth.getAllAccounts()[0]||null;
+ const redirect=await auth.handleRedirectPromise();
+ account=redirect?.account||auth.getActiveAccount()||auth.getAllAccounts()[0]||null;
+ if(account)auth.setActiveAccount(account);
 }
 async function accessToken(){
  let r;try{r=await auth.acquireTokenSilent({scopes:['Files.ReadWrite.AppFolder'],account})}
- catch{r=await auth.acquireTokenPopup({scopes:['Files.ReadWrite.AppFolder'],account})}
+ catch(e){if(!interactiveLogin || !(e instanceof msal.InteractionRequiredAuthError))throw e; r=await auth.acquireTokenPopup({scopes:['Files.ReadWrite.AppFolder'],account})}
  return r.accessToken;
 }
 async function graph(path,opts={}){
@@ -141,9 +148,18 @@ async function persistCloud(){
  }catch(e){dirty=true;throw e}finally{saving=false;if(success&&dirty&&etag&&ready){setTimeout(()=>persistCloud().catch(e=>{status('GEMMEFEJL: '+e.message);alert('Kunne ikke gemme: '+e.message)}),700)}}
 }
 function statusIsSaved(){return el('cloudStatus').textContent.startsWith('Gemt i OneDrive')}
-el('login').onclick=async()=>{try{status('Logger ind…');await initialize();if(!account){const r=await auth.loginPopup({scopes:['Files.ReadWrite.AppFolder'],prompt:'select_account'});account=r.account}await loadCloud();el('login').textContent='Forbundet ✓'}catch(e){status('Fejl: '+e.message);alert(e.message)}};
+async function connect(interactive=false){
+ const button=el('login');button.disabled=true;interactiveLogin=interactive;
+ try{
+ status(interactive?'Logger ind…':'Genopretter forbindelse…');await initialize();
+ if(!account){if(!interactive){status('Log ind for at forbinde til OneDrive');return;}const r=await auth.loginPopup({scopes:['Files.ReadWrite.AppFolder']});account=r.account;auth.setActiveAccount(account);}
+ await loadCloud();button.textContent='Forbundet ✓';
+ }catch(e){status('Forbindelse ikke oprettet: '+e.message);button.textContent='Log ind / forbind igen';if(interactive)alert(e.message);}
+ finally{interactiveLogin=false;button.disabled=false;}
+}
+el('login').onclick=()=>connect(true);
 el('sync').onclick=async()=>{try{if(!ready)throw Error('Log ind først');await loadCloud()}catch(e){status('Fejl: '+e.message);alert(e.message)}};
-window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue=''}});render()})();
+window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue=''}});render();connect(false)})();
 </script><script>
 (()=>{
  const main=document.querySelector('main.content'), breeding=document.getElementById('breeding-section');
