@@ -55,7 +55,7 @@ const monthly=Array.from({length:12},(_,i)=>yearChanges.filter(c=>Number(c.date.
 function renderWater(){const tankId=el('measureTank').value,key=el('measureType').value,items=data.measurements.filter(m=>m.tankId===tankId).sort((a,b)=>b.date.localeCompare(a.date));svgLine('waterChart',items,key);el('measurementHistory').innerHTML=items.length?`<table class="measurement-table"><thead><tr><th>Dato</th><th>${esc(types[key][0])}</th><th>Note</th><th></th></tr></thead><tbody>${items.slice(0,30).map(m=>`<tr><td>${esc(m.date)}</td><td>${m[key]??'—'} ${m[key]!==null?types[key][1]:''}</td><td>${esc(m.note||'')}</td><td><button data-action="deleteMeasure" data-id="${esc(m.id)}">Slet</button></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Ingen vandmålinger for dette akvarium.</p>'}
 function renderMaintenance(){const names=Object.fromEntries(data.tanks.map(t=>[t.id,t.name]));const items=[...data.maintenance].sort((a,b)=>b.date.localeCompare(a.date));el('maintenanceHistory').innerHTML=items.length?`<table class="measurement-table"><thead><tr><th>Dato</th><th>Akvarium</th><th>Opgave</th><th>Note</th><th></th></tr></thead><tbody>${items.slice(0,100).map(m=>`<tr><td>${esc(m.date)}</td><td>${esc(names[m.tankId]||'—')}</td><td>${esc(m.type)}</td><td>${esc(m.note||'')}</td><td><button data-action="deleteMaintenance" data-id="${esc(m.id)}">Slet</button></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Ingen vedligeholdelse registreret endnu.</p>'}
 el('measureTank').onchange=renderWater;el('measureType').onchange=renderWater;
-if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.5').catch(()=>{}));
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js?v=2.7').catch(()=>{}));
 
 // OneDrive app folder: all Graph requests are scoped to /me/drive/special/approot.
 const CLIENT_ID='da93f75a-dcab-44fe-b9ba-a6a8cda3bf53',FILE='Akvarier.xlsx';
@@ -77,7 +77,7 @@ async function initializeAuth(){
 }
 async function accessToken(){
  let r;try{r=await auth.acquireTokenSilent({scopes:['Files.ReadWrite.AppFolder'],account})}
- catch(e){if(!interactiveLogin || !(e instanceof msal.InteractionRequiredAuthError))throw e; r=await auth.acquireTokenPopup({scopes:['Files.ReadWrite.AppFolder'],account})}
+ catch(e){if(!interactiveLogin)throw e; r=await auth.acquireTokenPopup({scopes:['Files.ReadWrite.AppFolder'],account})}
  return r.accessToken;
 }
 async function graph(path,opts={}){
@@ -152,9 +152,9 @@ async function connect(interactive=false){
  const button=el('login');button.disabled=true;interactiveLogin=interactive;
  try{
  status(interactive?'Logger ind…':'Genopretter forbindelse…');await initialize();
- if(!account){if(!interactive){status('Log ind for at forbinde til OneDrive');return;}const r=await auth.loginPopup({scopes:['Files.ReadWrite.AppFolder']});account=r.account;auth.setActiveAccount(account);}
+ if(interactive){const r=await auth.loginPopup({scopes:['Files.ReadWrite.AppFolder'],prompt:'select_account'});account=r.account;auth.setActiveAccount(account);}else if(!account){status('Log ind for at forbinde til OneDrive');return;}
  await loadCloud();button.textContent='Forbundet ✓';
- }catch(e){status('Forbindelse ikke oprettet: '+e.message);button.textContent='Log ind / forbind igen';if(interactive)alert(e.message);}
+ }catch(e){status('Forbindelse ikke oprettet: '+e.message);button.textContent='Log ind / forbind igen';if(interactive)alert((e.errorCode?e.errorCode+': ':'')+e.message);}
  finally{interactiveLogin=false;button.disabled=false;}
 }
 el('login').onclick=()=>connect(true);
